@@ -1,6 +1,6 @@
 #!/usr/bin/env dub
 /+ dub.sdl:
-dependency "dopt" version="~>0.3.12"
+dependency "dopt" version="~>0.3.13"
 dependency "progress-d" version="~>1.0.0"
 +/
 module cifar10;
