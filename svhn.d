@@ -123,7 +123,8 @@ void main(string[] args)
 	float[] ls = new float[labels.volume];
 
     auto logfile = File(logpath, "w");
-    logfile.write("epoch,train_loss,train_acc,test_loss,test_acc");
+    logfile.writeln("epoch,train_loss,train_acc,test_loss,test_acc");
+	logfile.flush();
 
 	foreach(e; 0 .. epochs)
 	{
@@ -192,7 +193,9 @@ void main(string[] args)
             testProgress.next();
 		}
 
-        logfile.writeln(e + 1, ",", trainLoss, ",", trainAcc, ",", testLoss, ",", testAcc);
+        logfile.writeln(e + 1, ",", trainLoss / trainNum, ",", trainAcc / trainNum, ",", testLoss / testNum, ",",
+			testAcc / testNum);
+		logfile.flush();
 
 		writeln();
 		writeln();
