@@ -1,7 +1,7 @@
 Lipschitz Continuous Neural Networks
 ====================================
 
-This repo contains the code used to run the experiments in Gouk et al. (2018). The code uses [dopt](https://github.com/henrygouk/dopt/), a deep learning framework written in D.
+This repo contains the code used to run the experiments for an extended version of Gouk et al. (2018). The code uses [dopt](https://github.com/henrygouk/dopt/), a deep learning framework written in D.
 
 Example
 -------

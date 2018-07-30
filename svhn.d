@@ -1,6 +1,6 @@
 #!/usr/bin/env dub
 /+ dub.sdl:
-dependency "dopt" version="~>0.3.13"
+dependency "dopt" version="==0.3.17"
 dependency "progress-d" version="~>1.0.0"
 +/
 module svhn;
@@ -28,6 +28,7 @@ void main(string[] args)
     string logpath = "/dev/null";
     string arch;
     string datapath;
+    bool validation;
 
     getopt(
         args,
@@ -38,21 +39,29 @@ void main(string[] args)
         "batchnorm", &batchnorm,
         "modelpath", &modelpath,
         "logpath", &logpath,
+        "valid", &validation,
         config.required, "arch", &arch,
         config.required, "datapath", &datapath
     );
 
 	writeln("Loading data...");
-    auto data = loadSVHN(datapath);
+    auto data = loadSVHN(datapath, validation);
 
 	writeln("Constructing network graph...");
-	size_t batchSize = 100;
-    auto features = float32([batchSize, 3, 32, 32]);
-    auto labels = float32([batchSize, 10]);
+	size_t batchSize;
+    Operation features;
+    Operation labels;
 
     Layer preds;
     size_t epochs;
     float[size_t] learningRateSchedule;
+
+    auto denseOpts = new DenseOptions().spectralDecay(spectralDecay);
+
+    if(lambda != float.infinity)
+    {
+        denseOpts.weightProj = projMatrix(float32Constant(lambda), norm);
+    }
 
     if(arch == "vgg")
     {
@@ -65,12 +74,16 @@ void main(string[] args)
 
         int[] sizes = [64, 64, -1, 128, 128, -1, 192, 192, -1, 256, 256, -1];
 
+        batchSize = 100;
+        features = float32([batchSize, 3, 32, 32]);
+        labels = float32([batchSize, 10]);
+
         preds  = vgg(features, sizes, [512, 512], opts)
-                .dense(10)
+                .dense(10, denseOpts)
                 .softmax();
         
-        epochs = 14;
-        learningRateSchedule = [0: 0.0001f, 10: 0.00001f, 12: 0.000001f];
+        epochs = 20;
+        learningRateSchedule = [0: 0.0001f, 15: 0.00001f, 18: 0.000001f];
     }
     else if(arch == "wrn")
     {
@@ -80,8 +93,12 @@ void main(string[] args)
         opts.spectralDecay = spectralDecay;
         opts.dropout = dropout;
 
+        batchSize = 50;
+        features = float32([batchSize, 3, 32, 32]);
+        labels = float32([batchSize, 10]);
+
         preds = wideResNet(features, 16, 4, opts)
-               .dense(10)
+               .dense(10, denseOpts)
                .softmax();
         
         epochs = 20;
@@ -208,14 +225,14 @@ void main(string[] args)
 
 float computeAccuracy(float[] ls, float[] preds)
 {
-	import std.algorithm : maxIndex;
+	import std.algorithm : maxElement, maxIndex;
 	import std.range : chunks, zip;
 
 	float correct = 0;
 
 	foreach(p, t; zip(preds.chunks(10), ls.chunks(10)))
 	{
-		if(p.maxIndex == t.maxIndex)
+		if(p.maxIndex == t.maxIndex && t.maxElement() == 1.0f)
 		{
 			correct++;
 		}

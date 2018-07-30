@@ -3,12 +3,36 @@
 dependency "dopt" version="==0.3.17"
 dependency "progress-d" version="~>1.0.0"
 +/
-module cifar10;
+module mnist;
 
 import dopt.core;
 import dopt.nnet;
 import dopt.online;
 import progress;
+
+Layer maybeDropout(Layer l, bool drop, float prob)
+{
+    if(drop)
+    {
+        return l.dropout(prob);
+    }
+    else
+    {
+        return l;
+    }
+}
+
+Layer maybeBatchNorm(Layer l, bool bn, BatchNormOptions opts = new BatchNormOptions())
+{
+    if(bn)
+    {
+        return l.batchNorm(opts);
+    }
+    else
+    {
+        return l;
+    }
+}
 
 void main(string[] args)
 {
@@ -26,7 +50,6 @@ void main(string[] args)
     bool batchnorm = false;
     string modelpath = "/dev/null";
     string logpath = "/dev/null";
-    string arch;
     string datapath;
     bool validation;
 
@@ -40,13 +63,11 @@ void main(string[] args)
         "modelpath", &modelpath,
         "logpath", &logpath,
         "valid", &validation,
-        config.required, "arch", &arch,
         config.required, "datapath", &datapath
     );
 
 	writeln("Loading data...");
-    auto data = loadCIFAR10(datapath, validation);
-	data.train = new ImageTransformer(data.train, 4, 4, true, false);
+    auto data = loadMNIST(datapath, validation);
 
 	writeln("Constructing network graph...");
 	size_t batchSize;
@@ -58,55 +79,42 @@ void main(string[] args)
     float[size_t] learningRateSchedule;
 
     auto denseOpts = new DenseOptions().spectralDecay(spectralDecay);
+    auto convOpts1 = new Conv2DOptions().spectralDecay(spectralDecay);
+    auto convOpts2 = new Conv2DOptions().spectralDecay(spectralDecay);
+    auto bnOpts = new BatchNormOptions();
 
     if(lambda != float.infinity)
     {
         denseOpts.weightProj = projMatrix(float32Constant(lambda), norm);
+        convOpts1.filterProj = projConvParams(float32Constant(lambda), [28, 28], [1, 1], [0, 0], norm);
+        convOpts2.filterProj = projConvParams(float32Constant(lambda), [12, 12], [1, 1], [0, 0], norm);
+        bnOpts.lipschitz = lambda;
     }
 
-    if(arch == "vgg")
-    {
-        auto opts = new VGGOptions();
-        opts.lipschitzNorm = norm;
-        opts.maxNorm = lambda;
-        opts.spectralDecay = spectralDecay;
-        opts.dropout = dropout;
-        opts.batchnorm = batchnorm;
+    batchSize = 100;
+    features = float32([batchSize, 1, 28, 28]);
+    labels = float32([batchSize, 10]);
 
-        batchSize = 100;
-        features = float32([batchSize, 3, 32, 32]);
-        labels = float32([batchSize, 10]);
-
-        preds  = vgg19(features, [512, 512], opts)
-                .dense(10, denseOpts)
-                .softmax();
-        
-        epochs = 140;
-        learningRateSchedule = [0: 0.0001f, 100: 0.00001f, 120: 0.000001f];
-    }
-    else if(arch == "wrn")
-    {
-        auto opts = new WRNOptions();
-        opts.lipschitzNorm = norm;
-        opts.maxNorm = lambda;
-        opts.spectralDecay = spectralDecay;
-        opts.dropout = dropout;
-
-        batchSize = 50;
-        features = float32([batchSize, 3, 32, 32]);
-        labels = float32([batchSize, 10]);
-
-        preds = wideResNet(features, 16, 10, opts)
-               .dense(10, denseOpts)
-               .softmax();
-        
-        epochs = 200;
-        learningRateSchedule = [0: 0.1f, 60: 0.02f, 120: 0.004f, 160: 0.0008f];
-    }
-    else
-    {
-        assert(0);
-    }
+    preds  = dataSource(features)
+            .conv2D(64, [5, 5], convOpts1)
+            .maybeBatchNorm(batchnorm, bnOpts)
+            .relu()
+            .maybeDropout(dropout, 0.3)
+            .maxPool([2, 2])
+            .conv2D(128, [5, 5], convOpts2)
+            .maybeBatchNorm(batchnorm, bnOpts)
+            .relu()
+            .maybeDropout(dropout, 0.3)
+            .maxPool([2, 2])
+            .dense(128, denseOpts)
+            .maybeBatchNorm(batchnorm, bnOpts)
+            .relu()
+            .maybeDropout(dropout, 0.5)
+            .dense(10, denseOpts)
+            .softmax();
+    
+    epochs = 60;
+    learningRateSchedule = [0: 0.0001f, 50: 0.00001f];
     
     auto network = new DAGNetwork([features], [preds]);
 
@@ -117,21 +125,7 @@ void main(string[] args)
 	auto learningRate = float32([], [0.0001f]);
 	auto testPlan = compile([testLossSym, preds.output]);
 
-    Updater updater;
-    
-    if(arch == "vgg")
-    {
-        updater = adam([lossSym, preds.trainOutput], network.params, network.paramProj, learningRate);
-    }
-    else if(arch == "wrn")
-    {
-        updater = sgd([lossSym, preds.trainOutput], network.params, network.paramProj, learningRate,
-            float32Constant(0.9), true);
-    }
-    else
-    {
-        assert(0);
-    }
+    Updater updater = amsgrad([lossSym, preds.trainOutput], network.params, network.paramProj, learningRate);
 
 	writeln("Training...");
 
@@ -231,7 +225,7 @@ float computeAccuracy(float[] ls, float[] preds)
 
 	foreach(p, t; zip(preds.chunks(10), ls.chunks(10)))
 	{
-		if(p.maxIndex == t.maxIndex)
+		if(p.maxIndex == t.maxIndex && t.maxElement() == 1.0f)
 		{
 			correct++;
 		}

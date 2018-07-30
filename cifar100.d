@@ -1,6 +1,6 @@
 #!/usr/bin/env dub
 /+ dub.sdl:
-dependency "dopt" version="~>0.3.13"
+dependency "dopt" version="==0.3.17"
 dependency "progress-d" version="~>1.0.0"
 +/
 module cifar100;
@@ -28,6 +28,7 @@ void main(string[] args)
     string logpath = "/dev/null";
     string arch;
     string datapath;
+    bool validation;
 
     getopt(
         args,
@@ -38,22 +39,30 @@ void main(string[] args)
         "batchnorm", &batchnorm,
         "modelpath", &modelpath,
         "logpath", &logpath,
+        "valid", &validation,
         config.required, "arch", &arch,
         config.required, "datapath", &datapath
     );
 
 	writeln("Loading data...");
-    auto data = loadCIFAR100(datapath);
+    auto data = loadCIFAR100(datapath, validation);
 	data.train = new ImageTransformer(data.train, 4, 4, true, false);
 
 	writeln("Constructing network graph...");
-	size_t batchSize = 100;
-    auto features = float32([batchSize, 3, 32, 32]);
-    auto labels = float32([batchSize, 100]);
+	size_t batchSize;
+    Operation features;
+    Operation labels;
 
     Layer preds;
     size_t epochs;
     float[size_t] learningRateSchedule;
+
+    auto denseOpts = new DenseOptions().spectralDecay(spectralDecay);
+
+    if(lambda != float.infinity)
+    {
+        denseOpts.weightProj = projMatrix(float32Constant(lambda), norm);
+    }
 
     if(arch == "vgg")
     {
@@ -64,8 +73,12 @@ void main(string[] args)
         opts.dropout = dropout;
         opts.batchnorm = batchnorm;
 
+        batchSize = 100;
+        features = float32([batchSize, 3, 32, 32]);
+        labels = float32([batchSize, 100]);
+
         preds  = vgg19(features, [512, 512], opts)
-                .dense(100)
+                .dense(100, denseOpts)
                 .softmax();
         
         epochs = 140;
@@ -79,8 +92,12 @@ void main(string[] args)
         opts.spectralDecay = spectralDecay;
         opts.dropout = dropout;
 
+        batchSize = 50;
+        features = float32([batchSize, 3, 32, 32]);
+        labels = float32([batchSize, 100]);
+
         preds = wideResNet(features, 16, 10, opts)
-               .dense(100)
+               .dense(100, denseOpts)
                .softmax();
         
         epochs = 200;
@@ -104,7 +121,7 @@ void main(string[] args)
     
     if(arch == "vgg")
     {
-        updater = amsgrad([lossSym, preds.trainOutput], network.params, network.paramProj, learningRate);
+        updater = adam([lossSym, preds.trainOutput], network.params, network.paramProj, learningRate);
     }
     else if(arch == "wrn")
     {
@@ -207,14 +224,14 @@ void main(string[] args)
 
 float computeAccuracy(float[] ls, float[] preds)
 {
-	import std.algorithm : maxIndex;
+	import std.algorithm : maxElement, maxIndex;
 	import std.range : chunks, zip;
 
 	float correct = 0;
 
-	foreach(p, t; zip(preds.chunks(100), ls.chunks(100)))
+	foreach(p, t; zip(preds.chunks(10), ls.chunks(10)))
 	{
-		if(p.maxIndex == t.maxIndex)
+		if(p.maxIndex == t.maxIndex && t.maxElement() == 1.0f)
 		{
 			correct++;
 		}
